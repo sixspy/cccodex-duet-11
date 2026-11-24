@@ -9,7 +9,9 @@ from pathlib import Path
 
 def 连接() -> sqlite3.Connection:
     数据目录.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(库路径)
+    c = sqlite3.connect(库路径, timeout=15)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
+    # 裁窗与批末重裁靠写锁串行；等待而非立刻报 locked
+    c.execute("PRAGMA busy_timeout = 15000")
     return c

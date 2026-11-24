@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
-from app.services import 目录, 左装载, 右装载, 对齐, 结论, 夹具, 统计, 说明
+from app.services import 目录, 左装载, 右装载, 对齐, 结论, 夹具, 统计, 说明, 时钟
+from app.modules import 双轨时钟漂移 as 钟
 
 路由 = APIRouter()
 
@@ -13,7 +14,11 @@ def api_轨规():
 
 @路由.post("/api/轨规")
 def api_改轨规(体: dict):
-    return 目录.改轨规(体)
+    try:
+        return 目录.改轨规(体)
+    except ValueError as e:
+        # 时钟口径/窗口非法或缺失时不落半截，直接 400
+        raise HTTPException(400, str(e))
 
 @路由.get("/api/源登记")
 def api_源():
@@ -51,19 +56,20 @@ def api_左装(体: dict):
 def api_右装(体: dict):
     return 右装载.装一批(体)
 
-@路由.post("/api/左轨/夹具/{名}")
-def api_左夹(名: str):
+# 路径参数名须 ASCII：Starlette 只识别 ASCII 占位符，中文名会被当成字面量
+@路由.post("/api/左轨/夹具/{fixture}")
+def api_左夹(fixture: str):
     try:
-        return 左装载.装一批(夹具.读取(名))
+        return 左装载.装一批(夹具.读取(fixture))
     except FileNotFoundError:
-        raise HTTPException(404, 名)
+        raise HTTPException(404, fixture)
 
-@路由.post("/api/右轨/夹具/{名}")
-def api_右夹(名: str):
+@路由.post("/api/右轨/夹具/{fixture}")
+def api_右夹(fixture: str):
     try:
-        return 右装载.装一批(夹具.读取(名))
+        return 右装载.装一批(夹具.读取(fixture))
     except FileNotFoundError:
-        raise HTTPException(404, 名)
+        raise HTTPException(404, fixture)
 
 @路由.post("/api/对齐/跑")
 def api_对齐():
@@ -72,6 +78,57 @@ def api_对齐():
 @路由.post("/api/对拍结论/跑")
 def api_结论():
     return 结论.跑一次()
+
+
+@路由.get("/api/时钟漂移")
+def api_时钟态():
+    return 时钟.取态()
+
+
+@路由.post("/api/时钟漂移/口径")
+def api_时钟口径(体: dict):
+    try:
+        return 时钟.设口径(
+            口径=体.get("口径"),
+            窗口开始=体.get("窗口开始"),
+            窗口结束=体.get("窗口结束"),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@路由.get("/api/时钟漂移/裁决")
+def api_时钟裁决(业务键: str | None = None, 轨别: str | None = None, 限制: int = 200):
+    return 时钟.裁决列表(业务键=业务键, 轨别=轨别, 限制=限制)
+
+
+@路由.get("/api/时钟漂移/旁路")
+def api_时钟旁路():
+    return 时钟.旁路列表()
+
+
+@路由.get("/api/时钟漂移/缓冲")
+def api_时钟缓冲():
+    return 时钟.缓冲列表()
+
+
+@路由.post("/api/时钟漂移/批末重裁")
+def api_时钟重裁():
+    return 时钟.批末重裁()
+
+
+@路由.post("/api/时钟漂移/存量重裁")
+def api_时钟存量重裁(体: dict | None = None):
+    try:
+        return 时钟.重裁存量((体 or {}).get("口径"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@路由.get("/api/时钟漂移/策略卡")
+def api_时钟策略卡():
+    态 = 时钟.取态()
+    return {"当前口径": 态["口径"], "卡片": 钟.策略卡片(态["口径"])}
 
 
 @路由.get("/api/统计/左命运")
@@ -98,11 +155,17 @@ def api_仓情():
 @路由.get("/api/空桩")
 def api_空桩():
     from pathlib import Path
+    import importlib
     root = Path(__file__).resolve().parents[1] / "modules"
-    out = []
+    out, 已落 = [], []
     if root.is_dir():
         for p in sorted(root.iterdir()):
             if p.is_dir() and p.name != "__pycache__" and (p / "__init__.py").is_file():
-                out.append(p.name)
-    return {"空桩": out, "条数": len(out)}
+                try:
+                    m = importlib.import_module(f"app.modules.{p.name}")
+                    已实现 = bool(getattr(m, "已实现", False))
+                except Exception:
+                    已实现 = False
+                (已落 if 已实现 else out).append(p.name)
+    return {"空桩": out, "条数": len(out), "已落": 已落}
 

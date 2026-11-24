@@ -2,34 +2,41 @@
 from __future__ import annotations
 from app.db import 连接
 from app.seed import 此刻
-from app.services import 目录
+from app.services import 目录, 时钟
 
 def 跑对齐() -> dict:
     规 = 目录.轨规()
     容差 = int(规.get("金额容差分", "0"))
     conn = 连接()
     try:
+        # 与装载/批末重裁同一写锁：裁剪并发不会与本次重算交错双落
+        conn.execute("BEGIN IMMEDIATE")
         # 清空上次对齐结果（基线默认：每次重算）
         conn.execute("DELETE FROM 对齐差")
         conn.execute("DELETE FROM 悬账单")
 
-        左键 = {
-            r["业务键"]: r
-            for r in conn.execute(
-                "SELECT * FROM 左轨流水 WHERE 命运='已入左'"
-            ).fetchall()
-        }
         # 同键多笔：按业务键汇总金额（基线口径）
+        # valid=0 的事件即使命运残留「已入」，也不得算进差额
         左汇总: dict[str, int] = {}
         左代表: dict[str, str] = {}
-        for r in conn.execute("SELECT * FROM 左轨流水 WHERE 命运='已入左'").fetchall():
+        for r in conn.execute(
+            """SELECT * FROM 左轨流水 WHERE 命运='已入左'
+               AND 事件编号 NOT IN (
+                 SELECT 事件编号 FROM 时钟裁决 WHERE 轨别='左' AND valid=0
+               )"""
+        ).fetchall():
             k = r["业务键"]
             左汇总[k] = 左汇总.get(k, 0) + int(r["金额分"])
             左代表[k] = r["事件编号"]
 
         右汇总: dict[str, int] = {}
         右代表: dict[str, str] = {}
-        for r in conn.execute("SELECT * FROM 右轨流水 WHERE 命运='已入右'").fetchall():
+        for r in conn.execute(
+            """SELECT * FROM 右轨流水 WHERE 命运='已入右'
+               AND 事件编号 NOT IN (
+                 SELECT 事件编号 FROM 时钟裁决 WHERE 轨别='右' AND valid=0
+               )"""
+        ).fetchall():
             k = r["业务键"]
             右汇总[k] = 右汇总.get(k, 0) + int(r["金额分"])
             右代表[k] = r["事件编号"]
@@ -81,6 +88,9 @@ def 跑对齐() -> dict:
                 差 += 1
 
         conn.commit()
+        # 计数用独立读连接：不在本事务里吞掉刚提交的写锁
+        旁 = 时钟.旁路计数()
+        缓 = 时钟.缓冲待批末计数()
         return {
             "键总数": len(所有键),
             "对齐": 对齐,
@@ -88,6 +98,11 @@ def 跑对齐() -> dict:
             "悬账": 悬,
             "容差分": 容差,
             "时刻": 时刻,
+            "时钟旁路": 旁,
+            "时钟缓冲待批末": 缓,
         }
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

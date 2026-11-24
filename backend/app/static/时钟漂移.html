@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>时钟漂移 · 对拍</title>
+  <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+  <div class="壳">
+    <header class="顶栏">
+      <div class="顶左">
+        <div class="牌名">对拍</div>
+        <div class="牌骨">左轨装载 → 右轨装载 → 同键对齐落差 → 单边悬账 → 对拍结论</div>
+      </div>
+      <nav class="管线">
+          <a href="/">对拍台</a>
+          <a href="/左轨.html">左轨流水</a>
+          <a href="/右轨.html">右轨流水</a>
+          <a href="/对齐差.html">对齐差表</a>
+          <a href="/悬账单.html">悬账单</a>
+          <a href="/对拍结论.html">对拍结论</a>
+          <a href="/时钟漂移.html" class="亮">时钟漂移</a>
+          <a href="/源登记.html">源登记</a>
+          <a href="/轨规.html">轨规</a>
+      </nav>
+    </header>
+    <main class="主">
+
+      <section class="行卡">
+        <h1>双轨时钟漂移</h1>
+        <p class="说明">
+          裁窗只认事件时；处理时只决定落处。事件时出窗、处理时入窗这一瞬间，
+          严格形态看旁路账册，缓冲形态看缓冲包 —— 两册互斥，不会双落。
+          默认口径「不裁」，双轨对齐 happy path 不变。
+        </p>
+        <div class="工具条">
+          <label>时钟口径
+            <select id="口径">
+              <option value="不裁">不裁（默认，基线）</option>
+              <option value="事件时严格">事件时严格</option>
+              <option value="处理时缓冲">处理时缓冲</option>
+            </select>
+          </label>
+          <label>窗口开始 <input id="窗始" style="width:200px"/></label>
+          <label>窗口结束 <input id="窗终" style="width:200px"/></label>
+          <button id="存">应用口径与窗口</button>
+          <button class="次" id="重裁">批末重裁</button>
+          <button class="次" id="存量重裁">存量重裁</button>
+          <button class="次" id="刷">刷新</button>
+        </div>
+        <p class="说明">窗口按 UTC，左闭右开 [开始, 结束)。严格/缓冲缺有效窗口时装载一律驳回。
+          应用口径/窗口会自动连带存量重裁；也可手动点「存量重裁」核对两册。</p>
+        <pre class="报" id="报"></pre>
+      </section>
+
+      <section class="行卡">
+        <h2>水位</h2>
+        <div id="水位"></div>
+      </section>
+
+      <section class="行卡">
+        <h2>策略卡片</h2>
+        <div id="卡片"></div>
+      </section>
+
+      <section class="行卡 双栏">
+        <div>
+          <h2>旁路账册</h2>
+          <p class="说明">事件时出窗、处理时入窗且严格形态 → 即入本册，不进对齐差。</p>
+          <div id="旁路表"></div>
+        </div>
+        <div>
+          <h2>缓冲包</h2>
+          <p class="说明">处理时缓冲形态下先落本包；包状态区分 待批末 / 已重裁 / 已出账。</p>
+          <div id="缓冲表"></div>
+        </div>
+      </section>
+
+      <section class="行卡">
+        <h2>时钟裁决（只读）</h2>
+        <p class="说明">按业务键查：事件时、处理时、命运、valid。valid=0 不参与对齐。</p>
+        <div class="工具条">
+          <input id="键" placeholder="业务键（可空）" style="width:220px"/>
+          <button class="次" id="查">查询</button>
+        </div>
+        <div id="裁决表"></div>
+      </section>
+
+    </main>
+  </div>
+  <script src="/common.js"></script>
+  <script>
+const 口径说明 = { "不裁": "灰", "事件时严格": "绿", "处理时缓冲": "灰" };
+
+const 画卡片 = (卡片) => {
+  document.getElementById("卡片").innerHTML = 卡片.map(c => {
+    if (c.名 === "采集口径") {
+      return `<div class="条${c.生效 ? " 条主" : ""}" style="margin:8px 0">
+        <b>${c.名}</b>
+        <ul class="说明">
+          <li>事件时：${c.事件时}</li>
+          <li>处理时：${c.处理时}</li>
+          <li>禁：${c.禁}</li>
+          <li>窗口：${c.窗口}</li>
+          <li>读引用：${c.读引用}</li>
+        </ul></div>`;
+    }
+    return `<div class="条${c.生效 ? " 条主" : ""}" style="margin:8px 0">
+      <b>${c.名}</b> ${c.生效 ? '<span class="徽 绿">生效中</span>' : '<span class="徽 灰">未启用</span>'}
+      <ul class="说明">
+        <li>口径：${c.口径}</li>
+        <li>出窗：${c.出窗}</li>
+        <li>缓冲期可读：${c.缓冲期可读}</li>
+        <li>读引用：${c.读引用}</li>
+        <li>批末动作：${c.批末动作}</li>
+        <li>并发：${c.并发}</li>
+      </ul></div>`;
+  }).join("");
+};
+
+(async () => {
+  const 态 = async () => {
+    const s = await get("/api/时钟漂移");
+    document.getElementById("口径").value = s.口径 || "不裁";
+    document.getElementById("窗始").value = s.窗口开始 || "";
+    document.getElementById("窗终").value = s.窗口结束 || "";
+    画卡片(s.策略卡片 || []);
+    document.getElementById("水位").innerHTML = 统计([
+      ["当前口径", 徽(s.口径)], ["窗口有效", s.窗口有效 ? 徽("1") : 徽("0")],
+      ["旁路账册", s.旁路账册], ["缓冲包", s.缓冲包], ["缓冲待批末", s.缓冲待批末],
+      ["裁决行", s.裁决],
+    ]);
+  };
+  const 旁路 = async () => {
+    const rows = await get("/api/时钟漂移/旁路");
+    document.getElementById("旁路表").innerHTML = 表(
+      ["轨别","业务键","事件编号","金额分","事件时","处理时","原因","时刻"],
+      rows,
+      r => `<td>${r.轨别}</td><td>${r.业务键}</td><td>${r.事件编号}</td><td>${r.金额分}</td>
+        <td>${r.事件时}</td><td>${r.处理时}</td><td>${r.原因}</td><td>${r.时刻}</td>`
+    );
+  };
+  const 缓冲 = async () => {
+    const rows = await get("/api/时钟漂移/缓冲");
+    document.getElementById("缓冲表").innerHTML = 表(
+      ["轨别","业务键","事件编号","包状态","重裁命运","事件时","处理时"],
+      rows,
+      r => `<td>${r.轨别}</td><td>${r.业务键}</td><td>${r.事件编号}</td>
+        <td>${徽(r.包状态)}</td><td>${徽(r.重裁命运 || "-")}</td>
+        <td>${r.事件时}</td><td>${r.处理时}</td>`
+    );
+  };
+  const 裁决 = async () => {
+    const k = document.getElementById("键").value.trim();
+    const q = k ? "?业务键=" + encodeURIComponent(k) : "";
+    const d = await get("/api/时钟漂移/裁决" + q);
+    document.getElementById("裁决表").innerHTML = 表(
+      ["业务键","事件时","处理时","命运","valid","事件窗内","处理窗内","落处","轨别"],
+      d.行 || [],
+      r => `<td>${r.业务键}</td><td>${r.事件时}</td><td>${r.处理时}</td>
+        <td>${徽(r.命运)}</td><td>${徽(r.valid)}</td>
+        <td>${r.事件窗内 ?? "-"}</td><td>${r.处理窗内 ?? "-"}</td>
+        <td>${徽(r.落处)}</td><td>${r.轨别}</td>`
+    );
+  };
+  const 全刷 = async () => { await 态(); await 旁路(); await 缓冲(); await 裁决(); };
+
+  await 全刷();
+  document.getElementById("存").onclick = async () => {
+    const body = {
+      口径: document.getElementById("口径").value,
+      窗口开始: document.getElementById("窗始").value.trim(),
+      窗口结束: document.getElementById("窗终").value.trim(),
+    };
+    document.getElementById("报").textContent = JSON.stringify(await post("/api/时钟漂移/口径", body), null, 2);
+    await 全刷();
+  };
+  document.getElementById("存量重裁").onclick = async () => {
+    document.getElementById("报").textContent = JSON.stringify(await post("/api/时钟漂移/存量重裁"), null, 2);
+    await 全刷();
+  };
+  document.getElementById("重裁").onclick = async () => {
+    document.getElementById("报").textContent = JSON.stringify(await post("/api/时钟漂移/批末重裁"), null, 2);
+    await 全刷();
+  };
+  document.getElementById("刷").onclick = 全刷;
+  document.getElementById("查").onclick = 裁决;
+})();
+</script>
+</body>
+</html>

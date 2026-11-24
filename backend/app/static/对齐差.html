@@ -20,6 +20,7 @@
           <a href="/对齐差.html" class="亮">对齐差表</a>
           <a href="/悬账单.html">悬账单</a>
           <a href="/对拍结论.html">对拍结论</a>
+          <a href="/时钟漂移.html">时钟漂移</a>
           <a href="/源登记.html">源登记</a>
           <a href="/轨规.html">轨规</a>
       </nav>
@@ -35,6 +36,12 @@
         </div>
         <pre class="报" id="报"></pre>
       </section>
+      <section class="行卡">
+        <h2>时钟口径（对齐只认 valid=1）</h2>
+        <p class="说明">口径非「不裁」时，事件时出窗的键不进本表：严格形态落旁路账册，缓冲形态先落缓冲包待批末。
+          本表只做现行差额；旁路与缓冲在「时钟漂移」页独立核对，不与对齐差双落。</p>
+        <div id="时钟水位"></div>
+      </section>
       <section class="行卡"><div id="表"></div></section>
 
     </main>
@@ -42,7 +49,15 @@
   <script src="/common.js"></script>
   <script>
 (async () => {
+  const 时钟 = async () => {
+    const s = await get("/api/时钟漂移");
+    document.getElementById("时钟水位").innerHTML = 统计([
+      ["时钟口径", s.口径], ["窗口有效", s.窗口有效 ? "是" : "否"],
+      ["旁路账册", s.旁路账册], ["缓冲包", s.缓冲包], ["缓冲待批末", s.缓冲待批末],
+    ]);
+  };
   const paint = async () => {
+    await 时钟();
     const rows = await get("/api/对齐差");
     document.getElementById("表").innerHTML = 表(
       ["编号","业务键","左金额分","右金额分","差型","说明","时刻"],

@@ -3,16 +3,20 @@ from __future__ import annotations
 import json, uuid
 from app.db import 连接
 from app.seed import 此刻
-from app.services import 校验
+from app.services import 校验, 时钟
 
 def 装一批(体: dict) -> dict:
     批次 = 体.get("批次编号") or f"左批-{uuid.uuid4().hex[:8]}"
     事件 = 体.get("事件") or []
-    报告 = {"批次编号": 批次, "轨别": "左", "入流": 0, "跳过": 0, "驳回": 0, "明细": []}
+    报告 = {"批次编号": 批次, "轨别": "左", "入流": 0, "跳过": 0, "驳回": 0,
+            "旁路": 0, "缓冲": 0, "明细": []}
     for e in 校验.校验批次(体):
         报告["明细"].append({"命运": "批次预检", "说明": e})
     conn = 连接()
     try:
+        # 裁决与流水同一事务：不会出现流水已入而裁决未落的半截
+        conn.execute("BEGIN IMMEDIATE")
+        规 = {r["键"]: r["值"] for r in conn.execute("SELECT 键, 值 FROM 轨规").fetchall()}
         for ev in 事件:
             行错 = 校验.校验事件(ev)
             if 行错:
@@ -35,20 +39,35 @@ def 装一批(体: dict) -> dict:
                 报告["明细"].append({"事件编号": 编号, "命运": "驳回-未知左源"})
                 continue
             金额 = int(ev.get("金额分", 0))
-            事件时 = ev.get("事件时") or 此刻()
+            事件时 = str(ev.get("事件时") or "").strip()
             处理时 = ev.get("处理时") or 此刻()
+            # 事件时缺失不拿处理时顶替：时钟裁决会驳回
+            裁 = 时钟.裁决装载(conn, "左", 编号, 键, 金额, 事件时, 处理时, 规)
+            if not 裁["入流"]:
+                报告["驳回"] += 1
+                报告["明细"].append({"事件编号": 编号, "命运": 裁["命运"], "说明": 裁["驳回"]})
+                continue
             conn.execute(
                 """INSERT INTO 左轨流水(事件编号,业务键,金额分,源键,事件时,处理时,命运,批次编号)
-                   VALUES (?,?,?,?,?,?,'已入左',?)""",
-                (编号, 键, 金额, 源, 事件时, 处理时, 批次),
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (编号, 键, 金额, 源, 事件时, 处理时, 裁["命运"], 批次),
             )
+            if 裁["命运"].startswith("旁路"):
+                报告["旁路"] += 1
+            elif 裁["命运"].startswith("缓冲"):
+                报告["缓冲"] += 1
             报告["入流"] += 1
-            报告["明细"].append({"事件编号": 编号, "业务键": 键, "命运": "已入左"})
+            报告["明细"].append({"事件编号": 编号, "业务键": 键, "命运": 裁["命运"]})
+        # 同批次编号可重灌（如夹具反复灌）：覆盖报告，不因主键冲突整批回滚
         conn.execute(
-            "INSERT INTO 装载批次(编号,轨别,时刻,报告) VALUES (?,?,?,?)",
+            """INSERT INTO 装载批次(编号,轨别,时刻,报告) VALUES (?,?,?,?)
+               ON CONFLICT(编号) DO UPDATE SET 时刻=excluded.时刻, 报告=excluded.报告""",
             (批次, "左", 此刻(), json.dumps(报告, ensure_ascii=False)),
         )
         conn.commit()
         return 报告
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

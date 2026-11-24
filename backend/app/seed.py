@@ -66,6 +66,49 @@ CREATE TABLE IF NOT EXISTS 装载批次 (
   时刻 TEXT NOT NULL,
   报告 TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS 时钟裁决 (
+  编号 INTEGER PRIMARY KEY AUTOINCREMENT,
+  轨别 TEXT NOT NULL,
+  事件编号 TEXT NOT NULL,
+  业务键 TEXT NOT NULL,
+  事件时 TEXT NOT NULL DEFAULT '',
+  处理时 TEXT NOT NULL DEFAULT '',
+  事件窗内 INTEGER,
+  处理窗内 INTEGER,
+  命运 TEXT NOT NULL,
+  valid INTEGER NOT NULL,
+  落处 TEXT NOT NULL DEFAULT '无',
+  口径 TEXT NOT NULL DEFAULT '不裁',
+  时刻 TEXT NOT NULL,
+  UNIQUE(轨别, 事件编号)
+);
+CREATE TABLE IF NOT EXISTS 时钟旁路账册 (
+  编号 INTEGER PRIMARY KEY AUTOINCREMENT,
+  轨别 TEXT NOT NULL,
+  事件编号 TEXT NOT NULL,
+  业务键 TEXT NOT NULL,
+  金额分 INTEGER NOT NULL,
+  事件时 TEXT NOT NULL DEFAULT '',
+  处理时 TEXT NOT NULL DEFAULT '',
+  原因 TEXT NOT NULL,
+  口径 TEXT NOT NULL,
+  时刻 TEXT NOT NULL,
+  UNIQUE(轨别, 事件编号)
+);
+CREATE TABLE IF NOT EXISTS 时钟缓冲包 (
+  编号 INTEGER PRIMARY KEY AUTOINCREMENT,
+  轨别 TEXT NOT NULL,
+  事件编号 TEXT NOT NULL,
+  业务键 TEXT NOT NULL,
+  金额分 INTEGER NOT NULL,
+  事件时 TEXT NOT NULL DEFAULT '',
+  处理时 TEXT NOT NULL DEFAULT '',
+  包状态 TEXT NOT NULL DEFAULT '待批末',
+  重裁命运 TEXT NOT NULL DEFAULT '',
+  口径 TEXT NOT NULL,
+  时刻 TEXT NOT NULL,
+  UNIQUE(轨别, 事件编号)
+);
 """
 
 
@@ -86,6 +129,13 @@ def 初始化库() -> None:
             "去皮": "双源键对齐管道",
         }.items():
             conn.execute("INSERT INTO 轨规(键, 值) VALUES (?, ?)", (k, v))
+    # 时钟口径独立补种：老库已有轨规时也要有，否则严格/缓冲形态无键可读
+    for k, v in {
+        "时钟口径": "不裁",
+        "窗口开始": "2026-11-24T00:00:00Z",
+        "窗口结束": "2026-11-25T00:00:00Z",
+    }.items():
+        conn.execute("INSERT OR IGNORE INTO 轨规(键, 值) VALUES (?, ?)", (k, v))
     if conn.execute("SELECT COUNT(*) AS c FROM 源登记").fetchone()["c"] == 0:
         conn.execute(
             "INSERT INTO 源登记(源键,轨别,名称,说明) VALUES (?,?,?,?)",
